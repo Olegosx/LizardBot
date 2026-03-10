@@ -2,9 +2,11 @@
 
 ## Требования
 
-- Python 3.10+
+- **Python 3.11** (3.12 несовместим — segfault с C-расширениями py-clob-client)
 - Linux (Ubuntu 22.04+)
 - OpenSSL (для генерации сертификатов)
+
+> **Быстрый старт:** `sudo bash install.sh` — автоматически выполняет шаги 0–8 за вас.
 
 ---
 
@@ -12,7 +14,7 @@
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3 python3-pip python3-venv git openssl
+sudo apt install -y python3.11 python3.11-venv python3.11-dev libffi-dev git openssl
 ```
 
 Создайте системного пользователя (если ещё не существует):
@@ -36,7 +38,7 @@ sudo chown master:master /opt/lizardbot
 git clone <repo_url> /opt/lizardbot
 cd /opt/lizardbot
 
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -160,7 +162,7 @@ Type=simple
 User=master
 Group=master
 WorkingDirectory=/opt/lizardbot
-ExecStart=/opt/lizardbot/.venv/bin/python3 -m src.main
+ExecStart=/opt/lizardbot/.venv/bin/python3.11 -m src.main
 Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=60

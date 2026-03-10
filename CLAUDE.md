@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **LizardBot** — торговый бот для [Polymarket](https://polymarket.com), работающий с BTC "Up or Down" рынками. Реализует оптимальный вариант **Гипотезы 1**: ставка на ведущий исход за 30 мин до закрытия рынка, только если `std_dev(probability) ≤ 0.20`.
 
-Доступ: `https://127.0.0.1/LizardBot/`
+Доступ: `https://<server_ip>:8443` (HTTPS, самоподписной сертификат или Let's Encrypt)
 
 ## Tech Stack
 
-- **Backend**: Python 3.x + FastAPI + SQLite
-- **Frontend**: Bootstrap + JavaScript + Chart.js (WebSocket real-time)
-- **Polymarket**: официальный `py-clob-client`
+- **Backend**: Python **3.11** + FastAPI + SQLite (Python 3.12 несовместим — segfault)
+- **Frontend**: Bootstrap 5.3 + Vanilla JS + Chart.js 4 (WebSocket real-time)
+- **Polymarket**: официальный `py-clob-client` (CLOB) + `gamma-api.polymarket.com` (Gamma)
 
 ## Architecture
 
@@ -55,16 +55,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `danger_zone_action`: `"skip"` | `"reduce"` | `"trade"`
 - `recovery_action`: `"skip"` | `"enter"` | `"enter_if_safe"` (при рестарте после офлайна)
 - `vol_threshold`: `0.20` (порог фильтра)
-- `users`: `{username: bcrypt_hash}` для Basic Auth фронтенда
+- `users`: `{username: bcrypt_hash}` для Session Auth фронтенда (cookie `lz_session`)
 
 ## Development Commands
 
 ```bash
-# Установка зависимостей
+# Установка (Ubuntu, первый раз)
+sudo bash install.sh
+
+# Установка зависимостей вручную (Python 3.11!)
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Запуск бота
-python src/main.py
+python3 -m src.main
 
 # Тесты
 pytest
@@ -87,8 +91,9 @@ LizardBot/
 │   ├── client/          # PolymarketClient
 │   ├── bot/             # BotEngine, Scanner, Tracker, Strategy, OrderManager
 │   ├── db/              # DBRepository (SQLite)
-│   └── api/             # FastAPI, routes, WebSocket, BasicAuth
-├── frontend/            # Bootstrap + Chart.js SPA
+│   └── api/             # FastAPI, routes, WebSocket, SessionAuth
+├── frontend/            # Bootstrap 5.3 + Chart.js SPA (login.html + index.html)
+├── install.sh           # автоматический инсталлятор Ubuntu (Python 3.11)
 ├── data/lizardbot.db    # SQLite (создаётся автоматически)
 ├── logs/lizardbot.log
 ├── config.json          # ! в .gitignore

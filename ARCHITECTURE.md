@@ -5,29 +5,28 @@
 ## Level 1 — System Context
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        LizardBot                            │
-│                                                             │
-│  ┌──────────────┐   SharedState   ┌──────────────────────┐ │
-│  │  BotEngine   │◄───────────────►│    APIServer         │ │
-│  │  (Thread 1)  │                 │    (Thread 2)        │ │
-│  └──────┬───────┘                 └──────────┬───────────┘ │
-│         │                                    │             │
-│  ┌──────▼───────┐                 ┌──────────▼───────────┐ │
-│  │ConfigLoader  │                 │  Frontend (Browser)  │ │
-│  │  (Thread 3)  │                 │  Bootstrap+Chart.js  │ │
-│  └──────────────┘                 └──────────────────────┘ │
-└──────────┬──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           LizardBot                              │
+│                                                                  │
+│  ┌───────────────┐   SharedState   ┌────────────────────────┐   │
+│  │  BotEngine    │◄───────────────►│      APIServer         │   │
+│  │  (Thread 1)   │                 │      (Thread 2)        │   │
+│  └──────┬────────┘                 └───────────┬────────────┘   │
+│         │                                      │                │
+│  ┌──────▼────────┐                 ┌───────────▼────────────┐   │
+│  │ ConfigLoader  │                 │   Browser (Frontend)   │   │
+│  │  (Thread 3)   │                 │   Bootstrap + Chart.js │   │
+│  └───────────────┘                 └────────────────────────┘   │
+└──────────┬───────────────────────────────────────────────────────┘
            │
-           ▼
-  ┌─────────────────┐
-  │  Polymarket API │
-  │  (CLOB API)     │
-  └─────────────────┘
+     ┌─────┴──────────────────────┐
+     ▼                            ▼
+Gamma API                     CLOB API
+(публичный, поиск рынков)     (авторизация по ключу, торговля)
 ```
 
 **Режимы работы:**
-- `simulation_mode: true` — сделки эмулируются, реальных ордеров нет. Фронтенд показывает баннер **[SIMULATION]**
+- `simulation_mode: true` — ордера эмулируются, баланс = $100, CLOB credentials не нужны
 - `simulation_mode: false` — реальная торговля через Polymarket CLOB API
 
 ---
@@ -35,37 +34,34 @@
 ## Level 2 — Containers
 
 ```
-┌─────────────────────── LizardBot Process ──────────────────────────┐
-│                                                                     │
-│  Thread 1: BotEngine          Thread 2: APIServer                  │
-│  ┌─────────────────────┐      ┌─────────────────────┐              │
-│  │ - MarketScanner     │      │ - FastAPI HTTP       │              │
-│  │ - MarketTracker     │      │ - WebSocket stream   │              │
-│  │ - Strategy          │      │ - Basic Auth         │              │
-│  │ - OrderManager      │      └──────────┬──────────┘              │
-│  └──────────┬──────────┘                 │                         │
-│             │                            │                         │
-│             └──────────┬─────────────────┘                         │
-│                        │                                           │
-│              ┌─────────▼──────────┐                                │
-│              │    SharedState      │   Thread 3: ConfigLoader       │
-│              │ - config            │◄──────────────────────────────│
-│              │ - markets           │   Читает config.json           │
-│              │ - positions         │   каждые N секунд              │
-│              │ - history           │                                │
-│              │ - log_buffer        │                                │
-│              │ - commands          │                                │
-│              │ - balance           │                                │
-│              └─────────┬──────────┘                                │
-│                        │                                           │
-│              ┌─────────▼──────────┐                                │
-│              │   DBRepository      │                                │
-│              │   (lizardbot.db)    │                                │
-│              └────────────────────┘                                │
-└─────────────────────────────────────────────────────────────────────┘
-           │                         │
-           ▼                         ▼
-  Polymarket CLOB API          Browser (Frontend)
+┌──────────────────────────── LizardBot Process ──────────────────────────────┐
+│                                                                              │
+│  Thread 1: BotEngine              Thread 2: APIServer                        │
+│  ┌──────────────────────┐         ┌──────────────────────┐                  │
+│  │ - MarketScanner      │         │ - FastAPI HTTP        │                  │
+│  │ - MarketTracker      │         │ - WebSocket stream    │                  │
+│  │ - LizardStrategy     │         │ - Session Auth        │                  │
+│  │ - OrderManager       │         └──────────┬───────────┘                  │
+│  └──────────┬───────────┘                    │                              │
+│             │                                │                              │
+│             └────────────────┬───────────────┘                              │
+│                              │                                              │
+│                   ┌──────────▼──────────┐                                   │
+│                   │     SharedState     │◄── Thread 3: ConfigLoader          │
+│                   │ - config (BotConfig)│    Читает config.json              │
+│                   │ - markets           │    каждые N секунд                 │
+│                   │ - positions         │    mtime-based hot-reload          │
+│                   │ - history           │                                    │
+│                   │ - log_buffer        │                                    │
+│                   │ - balance           │                                    │
+│                   └──────────┬──────────┘                                   │
+│                              │                                              │
+│                   ┌──────────▼──────────┐                                   │
+│                   │    DBRepository     │                                    │
+│                   │  data/lizardbot.db  │                                    │
+│                   │  (SQLite)           │                                    │
+│                   └─────────────────────┘                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -75,64 +71,69 @@
 ### Thread 1: BotEngine
 
 ```
-BotEngine.run()  ──── main loop (every POLL_INTERVAL seconds)
+BotEngine.run()  ── main loop (каждые POLL_INTERVAL=60 сек)
     │
-    ├── _handle_commands()         ← читает из SharedState.commands
+    ├── config = shared.get_config_snapshot()   ← атомарная копия конфига
+    ├── shared.set_running(config.active)
     │
-    ├── ConfigLoader sync          ← копирует config из SharedState перед итерацией
-    │
-    ├── MarketScanner.scan()       ← находит новые BTC Up/Down рынки
-    │       │
-    │       └── PolymarketClient.get_btc_markets()
-    │
-    ├── MarketTracker.poll_all()   ← обновляет prob_history всех рынков
-    │       │
-    │       └── PolymarketClient.get_market_probability(market_id)
-    │
-    ├── _process_market()          ← для каждого отслеживаемого рынка
-    │       │
-    │       ├── check if T-30 window reached
-    │       ├── Strategy.check_signal()
-    │       └── OrderManager.place_bet()  (если сигнал)
-    │
-    ├── MarketTracker.check_closed_markets()
-    │       │
-    │       └── OrderManager.settle()  ← при закрытии рынка
-    │
-    └── PolymarketClient.get_balance() → SharedState.update_balance()
+    └── если config.active:
+            │
+            ├── _handle_commands()              ← обрабатывает служебные команды
+            │
+            ├── _scan_new_markets(config)
+            │       └── MarketScanner.scan()
+            │               └── GammaClient: GET /series?slug=...
+            │                               GET /markets?slug=... (для каждого event)
+            │
+            ├── MarketTracker.poll_all(config)  ← обновляет prob_history
+            │       └── CLOB: GET /midpoint?token_id=...  (для каждого рынка)
+            │
+            ├── _process_market() для каждого рынка со статусом "monitoring"
+            │       ├── LizardStrategy.check_signal()
+            │       ├── если нет истории → _apply_recovery_action()
+            │       └── если should_trade → OrderManager.place_bet()
+            │
+            ├── _settle_market() для каждого закрытого рынка
+            │       └── GammaClient.get_market_result() → OrderManager.settle()
+            │
+            └── _update_balance(config)
+                    ├── simulation_mode=True → $100 один раз (не обращается к CLOB)
+                    └── simulation_mode=False → CLOB get_balance_allowance()
 ```
 
 ### Thread 2: APIServer
 
 ```
-FastAPI app
+FastAPI (uvicorn, HTTPS если ssl_certfile/ssl_keyfile заданы)
     │
-    ├── Middleware: BasicAuthMiddleware  ← проверяет users из config
+    ├── GET/POST /login     ─── публичный (форма входа, bcrypt проверка)
+    ├── GET      /logout    ─── публичный (удаляет cookie lz_session → 302 /login)
     │
-    ├── GET  /api/status     → SharedState.status
-    ├── GET  /api/markets    → SharedState.markets
-    ├── GET  /api/positions  → SharedState.positions
-    ├── GET  /api/history    → DBRepository.load_trades()
-    ├── GET  /api/stats      → DBRepository.compute_stats()
-    ├── GET  /api/logs       → SharedState.log_buffer
-    ├── POST /api/start      → loader.patch({"active": True})
-    ├── POST /api/stop       → loader.patch({"active": False})
-    ├── GET  /api/config     → текущий BotConfig (для редактора)
-    ├── POST /api/config     → сохранить полный конфиг
-    ├── PATCH /api/config    → частичный апдейт (simulation_mode, active и т.д.)
-    └── WS   /ws             → WebSocketManager
-                                    │
-                                    └── pushes events from SharedState
+    ├── /api/*              ─── SessionAuth (Cookie "lz_session" → username | 401)
+    │   ├── GET  /api/status, /api/markets, /api/positions
+    │   ├── GET  /api/history, /api/stats, /api/logs, /api/whoami
+    │   ├── POST /api/start, /api/stop  → loader.patch({"active": ...})
+    │   └── GET/POST/PATCH /api/config  → loader.save_full / loader.patch
+    │
+    ├── WS /ws              ─── cookie проверяется при handshake (close 1008 без сессии)
+    │       └── WebSocketManager: snapshot при подключении + push каждые 3 сек
+    │
+    ├── /js, /css           ─── StaticFiles (публичные, только статика)
+    │
+    └── GET /, /{path}      ─── проверка cookie → 302 /login или index.html (SPA)
 ```
 
 ### Thread 3: ConfigLoader
 
 ```
-ConfigLoader.run()  ──── бесконечный цикл (каждые config_reload_interval сек)
+ConfigLoader.run()  ── бесконечный цикл (каждые config_reload_interval сек)
     │
-    ├── _has_changed()     ← сравнивает mtime файла
-    ├── load()             ← парсит config.json → BotConfig
-    └── SharedState.update_config(config)
+    ├── os.path.getmtime(config.json) != _last_mtime?
+    │       └── да → load() → shared.update_config(new_config)
+    │
+    └── patch(updates) / save_full(data)
+            └── вызывается из routes.py (start/stop/config save)
+                атомарная запись: tmpfile + os.replace
 ```
 
 ---
@@ -153,45 +154,45 @@ class MarketState:
     slug: str                   # URL-slug для Gamma API
     question: str
     series_ticker: str          # e.g. "btc-up-or-down-4h"
-    start_time: datetime        # Начало ценового окна (eventStartTime)
+    start_time: datetime        # начало ценового окна (eventStartTime)
     close_time: datetime
     created_at: datetime
     outcomes: List[str]         # e.g. ["Up", "Down"]
-    token_ids: Dict[str, str]   # outcome -> clobTokenId
-    order_min_size: float       # Минимальный размер ставки (USDC), поле рынка
+    token_ids: Dict[str, str]   # {"Up": "token_id_1", "Down": "token_id_2"}
+    order_min_size: float       # минимальная ставка (USDC)
     neg_risk: bool
-    prob_history: List[ProbPoint]
-    signal_fired: bool
-    signal_time: Optional[datetime]
-    status: str                 # 'monitoring'|'bet_placed'|'closed'|'skipped'
+    prob_history: List[ProbPoint] = []   # только в памяти, в БД не хранится
+    signal_fired: bool = False
+    signal_time: Optional[datetime] = None
+    status: str = "monitoring"  # monitoring | bet_placed | closed | skipped
 
 @dataclass
 class Position:
-    market_id: str
+    condition_id: str
     outcome: str
-    amount: float
-    entry_price: float
+    amount: float               # USDC
+    entry_price: float          # вероятность при входе (0.0–1.0)
     entry_time: datetime
     simulation: bool
-    order_id: Optional[str]
+    order_id: Optional[str] = None
 
 @dataclass
 class Trade:
-    market_id: str
+    condition_id: str
     question: str
     outcome: str
     amount: float
     entry_price: float
     entry_time: datetime
     close_time: datetime
-    result: str                 # 'won'|'lost'
+    result: str                 # "won" | "lost"
     pnl: float
     simulation: bool
 
 @dataclass
 class LogEntry:
     timestamp: datetime
-    level: str                  # DEBUG|INFO|WARNING|ERROR
+    level: str                  # DEBUG | INFO | WARNING | ERROR
     thread: str
     message: str
 
@@ -208,11 +209,6 @@ class BotStatus:
     balance: float
 
 @dataclass
-class Command:
-    action: str                 # 'start'|'stop'|'reload_config'
-    params: Dict[str, Any]
-
-@dataclass
 class StatsSnapshot:
     total_trades: int
     wins: int
@@ -220,7 +216,7 @@ class StatsSnapshot:
     win_rate: float
     total_pnl: float
     roi: float
-    max_drawdown: float
+    max_drawdown: float         # TODO: не вычисляется, всегда 0.0
     balance: float
     simulation_mode: bool
 
@@ -231,7 +227,7 @@ class SignalResult:
     probability: Optional[float]
     volatility: Optional[float]
     reason: str
-    is_danger_zone: bool = False    # для OrderManager.calculate_bet_amount (режим 'reduce')
+    is_danger_zone: bool = False  # для OrderManager: режим 'reduce'
 ```
 
 ---
@@ -240,40 +236,45 @@ class SignalResult:
 
 ```python
 class SharedState:
-    # Поля (защищены _lock: threading.RLock)
-    config: BotConfig
-    markets: Dict[str, MarketState]
-    positions: Dict[str, Position]      # market_id → Position (открытые)
-    history: List[Trade]
-    status: BotStatus
-    log_buffer: deque[LogEntry]         # последние LOG_BUFFER_SIZE записей
-    commands: Queue[Command]
-    balance: float
+    # Всё защищено _lock: threading.RLock
+    _config: BotConfig
+    _markets: Dict[str, MarketState]    # condition_id → MarketState
+    _positions: Dict[str, Position]     # condition_id → Position
+    _history: List[Trade]
+    _log_buffer: deque[LogEntry]        # последние 500 записей
+    _balance: float
+    _status: BotStatus
 
-    # Методы
-    def get_config_snapshot(self) -> BotConfig
-        # Потокобезопасная копия конфига (для использования внутри итерации)
-
+    # Конфиг
+    def get_config_snapshot(self) -> BotConfig   # копия — использовать внутри одной итерации
     def update_config(self, config: BotConfig) -> None
 
+    # Рынки
+    def add_market(self, market: MarketState) -> None
+    def get_market(self, condition_id: str) -> Optional[MarketState]
+    def get_all_markets(self) -> List[MarketState]
+    def get_monitored_condition_ids(self) -> List[str]
     def update_market(self, market: MarketState) -> None
+    def append_prob_point(self, condition_id: str, probability: float) -> None
+    def set_market_status(self, condition_id: str, status: str) -> None
 
-    def add_log(self, entry: LogEntry) -> None
-
-    def get_logs(self, limit: int = 200) -> List[LogEntry]
-
-    def push_command(self, cmd: Command) -> None
-
-    def pop_command(self) -> Optional[Command]
-
-    def update_balance(self, balance: float) -> None
-
-    def record_position(self, position: Position) -> None
-
-    def settle_position(self, market_id: str, trade: Trade) -> None
+    # Позиции
+    def add_position(self, position: Position) -> None
+    def get_position(self, condition_id: str) -> Optional[Position]
+    def get_all_positions(self) -> List[Position]
+    def settle_position(self, condition_id: str, trade: Trade) -> None
         # Удаляет из positions, добавляет в history
 
-    def get_stats(self) -> StatsSnapshot
+    # Логи
+    def add_log(self, entry: LogEntry) -> None
+    def get_logs(self, limit: int = 200) -> List[LogEntry]
+
+    # Статус и баланс
+    def set_running(self, running: bool) -> None
+    def get_status(self) -> BotStatus
+    def get_balance(self) -> float
+    def update_balance(self, balance: float) -> None
+    def get_stats(self) -> StatsSnapshot    # вычисляет из history
 ```
 
 ---
@@ -285,49 +286,46 @@ class SharedState:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8443
-    ssl_certfile: str = ""   # Путь к PEM-сертификату (относительный от CWD или абсолютный)
-    ssl_keyfile: str = ""    # Путь к приватному ключу PEM
+    ssl_certfile: str = ""      # путь к PEM-сертификату
+    ssl_keyfile: str = ""       # путь к приватному ключу
 
 @dataclass
 class MarketFilterConfig:
-    name: str               # e.g. "BTC 4h"
-    series_ticker: str      # e.g. "btc-up-or-down-4h"
-    enabled: bool
+    name: str                   # e.g. "BTC 4h"
+    series_ticker: str          # e.g. "btc-up-or-down-4h"
+    enabled: bool = True
 
 @dataclass
 class BotConfig:
     # Polymarket auth
-    private_key: str        # Приватный ключ Polygon-кошелька
-    api_key: str            # CLOB API key (опц.: если пусто — деривируется)
+    private_key: str            # приватный ключ Polygon-кошелька (пусто в sim mode)
+    api_key: str                # CLOB API key (пусто → деривируется из private_key)
     api_secret: str
     api_passphrase: str
-    funder_address: str     # Адрес кошелька на Polygon
+    funder_address: str         # адрес кошелька на Polygon (пусто в sim mode)
 
     # Режим
-    active: bool                    # true = стратегия работает (управляется через конфиг)
-    simulation_mode: bool           # true = эмуляция, false = реальная торговля
+    active: bool                # True = стратегия работает
+    simulation_mode: bool       # True = без реальных ордеров, баланс $100
 
-    # Стратегия
-    vol_threshold: float            # default: 0.20
-    lookback_minutes: int           # default: 30
-    danger_zone_action: str         # 'skip'|'reduce'|'trade'
-    danger_zone_reduce_factor: float# default: 0.5 (при 'reduce')
-    recovery_action: str            # 'skip'|'enter'|'enter_if_safe'
+    # Стратегия (Hypothesis 1)
+    vol_threshold: float        # порог std dev; default: 0.20
+    lookback_minutes: int       # окно наблюдения; default: 30
+    danger_zone_action: str     # "skip" | "reduce" | "trade"
+    danger_zone_reduce_factor: float  # default: 0.5 (при "reduce")
+    recovery_action: str        # "skip" | "enter" | "enter_if_safe"
 
     # Размер ставки
-    bet_mode: str                   # 'fixed'|'percent'|'double_on_double'
-    bet_amount: float               # для 'fixed'
-    bet_percent: float              # для 'percent' и 'double_on_double'
+    bet_mode: str               # "fixed" | "percent" | "double_on_double"
+    bet_amount: float           # USDC (для "fixed")
+    bet_percent: float          # % от баланса (для "percent" и "double_on_double")
 
     # Система
-    config_reload_interval: int     # default: 10 (сек)
-    log_level: str                  # default: 'INFO'
-
-    # Сервер
+    market_filters: List[MarketFilterConfig]
+    config_reload_interval: int # default: 10 (сек)
+    log_level: str              # default: "INFO"
     server: ServerConfig
-
-    # Пользователи (Basic Auth)
-    users: Dict[str, str]           # username → bcrypt_hash
+    users: Dict[str, str]       # username → bcrypt_hash
 ```
 
 ---
@@ -336,71 +334,65 @@ class BotConfig:
 
 ```python
 class ConfigLoader:
-    config_path: str
-    shared: SharedState
-    interval: int
-    _last_mtime: float
-
     def load(self) -> BotConfig
         # Читает и парсит config.json → BotConfig
 
     def save_full(self, data: dict) -> None
-        # Записывает dict как config.json атомарно (tmpfile + os.replace)
+        # Атомарная запись: tmpfile → os.replace → config.json
 
     def patch(self, updates: dict) -> None
-        # Читает config.json, мерджит updates, вызывает save_full
-        # Используется для старта/стопа и чекбокса симуляции
+        # Читает конфиг, мерджит updates, вызывает save_full
+        # Используется из routes.py: start/stop, sim-toggle, частичные изменения
 
     def run(self) -> None
-        # Thread 3 main loop:
-        # while True:
-        #   if _has_changed(): shared.update_config(load())
-        #   sleep(interval)
-
-    def _has_changed(self) -> bool
-        # Сравнивает os.path.getmtime с _last_mtime
+        # Thread 3: while True → if mtime изменился → update_config → sleep(interval)
 ```
 
 ---
 
 ### `src/client/polymarket.py`
 
-Два API: **Gamma** (`gamma-api.polymarket.com`, без авторизации) и **CLOB** (`clob.polymarket.com`, авторизация через приватный ключ).
-
 ```python
 class GammaClient:
-    # Поиск рынков и метаданные
+    """Публичный API gamma-api.polymarket.com, авторизация не нужна."""
+
     def get_markets_by_series(self, series_ticker: str) -> List[dict]
-        # GET /series?slug={series_ticker} → берём open events
-        # затем GET /markets?slug={event_slug} для каждого события
-        # (параметр series_slug в /markets Gamma API игнорирует)
+        # 1. GET /series?slug={series_ticker}  → список open events (тикеры)
+        # 2. GET /markets?slug={event_slug}     → данные рынка для каждого события
+        # ВАЖНО: параметр series_slug в /markets Gamma API игнорирует — нерабочий
+
     def get_market_by_slug(self, slug: str) -> Optional[dict]
+        # GET /markets?slug={slug}
 
 class PolymarketClient:
     _gamma: GammaClient
-    _clob: ClobClient   # py_clob_client.client.ClobClient
+    _clob: ClobClient            # py_clob_client
 
-    # Gamma методы (поиск рынков)
+    # В simulation_mode: ClobClient без credentials (только публичные эндпоинты)
+    # В real mode: ClobClient с private_key, POLYGON chain_id, funder
+
     def get_active_markets(self, series_ticker: str) -> List[dict]
     def get_market_by_slug(self, slug: str) -> Optional[dict]
     def get_market_result(self, slug: str) -> Optional[str]
-        # outcome с outcomePrices == "1.0" → победитель
+        # outcome у которого outcomePrices == "1.0" → победитель
 
-    # CLOB методы (котировки и ордера)
     def get_market_probability(self, token_id: str) -> Optional[float]
-        # get_midpoint(token_id) → {"mid": "0.87"} → float
+        # CLOB GET /midpoint?token_id=... → float (None при ошибке)
     def get_balance(self) -> float
-        # get_balance_allowance(AssetType.COLLATERAL)
-    def place_order(self, token_id: str, amount: float, neg_risk: bool, order_min_size: float) -> dict
-        # Проверяет amount >= order_min_size; размещает FOK market order
+        # CLOB get_balance_allowance(AssetType.COLLATERAL) → USDC
+    def place_order(self, token_id, amount, neg_risk, order_min_size) -> dict
+        # Проверяет amount >= order_min_size
+        # FOK market order через CLOB API
 
-class PolymarketError(Exception): ...
-class PolymarketNetworkError(PolymarketError): ...
-class PolymarketOrderError(PolymarketError): ...
+# Исключения:
+# PolymarketError → базовое
+# PolymarketNetworkError → сетевая ошибка
+# PolymarketOrderError → ошибка ордера
 ```
 
-**Маппинг outcomes → token_ids:** `clobTokenIds[i]` соответствует `outcomes[i]` (1:1).
-В `MarketState.token_ids` хранится как `Dict[str, str]`: `{"Up": "token1", "Down": "token2"}`.
+**Маппинг outcomes → token_ids:**
+`clobTokenIds[i]` ↔ `outcomes[i]` (1:1 по индексу).
+В `MarketState.token_ids`: `{"Up": "token_id_1", "Down": "token_id_2"}`.
 
 ---
 
@@ -408,30 +400,32 @@ class PolymarketOrderError(PolymarketError): ...
 
 ```python
 class LizardStrategy:
-    # Параметры стратегии берутся из BotConfig (не хранятся в классе)
+    """Hypothesis 1: ставим в T-30 при низкой волатильности."""
 
     def check_signal(self, market: MarketState, config: BotConfig) -> SignalResult
-        # 1. signal_fired → False
-        # 2. minutes_to_close > lookback_minutes → рано
-        # 3. volatility=None → нет истории
-        # 4. volatility > vol_threshold → False
-        # 5. get_leading_outcome → outcome, prob
-        # 6. is_danger_zone → _apply_danger_zone_action
+        # 1. signal_fired == True           → False (один сигнал на рынок)
+        # 2. minutes_to_close > lookback    → False (слишком рано)
+        # 3. volatility is None             → False (нет истории)
+        # 4. volatility > vol_threshold     → False
+        # 5. get_leading_outcome(prob_first, outcomes) → (name, prob)
+        # 6. is_danger_zone(prob)?          → _apply_danger_zone_action()
+        # 7. иначе                          → SignalResult(True, ...)
 
     def get_leading_outcome(self, prob_first: float, outcomes: List[str]) -> Tuple[str, float]
-        # prob_first = P(outcomes[0]); возвращает (leading_name, P(leading))
+        # prob_first = P(outcomes[0]); если >= 0.5 → (outcomes[0], prob_first)
+        # иначе → (outcomes[1], 1 - prob_first)
 
     def calculate_volatility(self, history: List[ProbPoint], window_minutes: int) -> Optional[float]
-        # statistics.stdev за последние window_minutes минут; None если < 2 точек
+        # statistics.stdev за последние window_minutes; None если < 2 точек
 
     def is_danger_zone(self, prob: float) -> bool
         # 0.80 <= prob <= 0.90
 
-    def _apply_danger_zone_action(self, outcome, prob, volatility, config) -> SignalResult
-        # skip → False | reduce → True, is_danger_zone=True | trade → True, is_danger_zone=True
+    def _apply_danger_zone_action(self, ..., config) -> SignalResult
+        # "skip"   → SignalResult(False)
+        # "reduce" → SignalResult(True, is_danger_zone=True)   → OrderManager уменьшит ставку
+        # "trade"  → SignalResult(True, is_danger_zone=True)
 ```
-
-`SignalResult.is_danger_zone: bool = False` — флаг для `OrderManager.calculate_bet_amount`.
 
 ---
 
@@ -439,23 +433,20 @@ class LizardStrategy:
 
 ```python
 class MarketScanner:
-    client: PolymarketClient
-    _tracked: Dict[str, bool]   # condition_id -> True (локальный кэш)
+    _client: PolymarketClient
+    _tracked: Dict[str, bool]   # condition_id → True (локальный кэш дубликатов)
 
     def scan(self, config: BotConfig) -> List[MarketState]
-        # Итерирует по всем включённым market_filters из конфига
-        # Возвращает новые MarketState (BotEngine добавляет в SharedState)
+        # Итерирует по enabled market_filters → _scan_series() для каждого
 
     def mark_tracked(self, condition_id: str) -> None
-        # Вызывается из BotEngine после add_market в SharedState
+        # Вызывается из BotEngine после добавления рынка в SharedState
 
     def _scan_series(self, market_filter: MarketFilterConfig) -> List[MarketState]
-    def _is_tracked(self, condition_id: str) -> bool
     def _is_tradeable(self, raw: dict) -> bool
-        # Проверяет enableOrderBook=True и not archived
+        # enableOrderBook == True и archived == False
     def _to_market_state(self, raw: dict, series_ticker: str) -> Optional[MarketState]
         # token_ids = dict(zip(outcomes, clobTokenIds))
-        # Конвертирует ответ API → MarketState
 ```
 
 ---
@@ -464,18 +455,15 @@ class MarketScanner:
 
 ```python
 class MarketTracker:
-    client: PolymarketClient
-    shared: SharedState
+    _client: PolymarketClient
+    _shared: SharedState
 
     def poll_all(self, config: BotConfig) -> None
-        # Обновляет prob_history для всех рынков в SharedState
+        # Для всех рынков в статусе monitoring/bet_placed:
+        # get_market_probability(token_ids[outcomes[0]]) → append_prob_point()
 
-    def poll_market(self, market_id: str) -> Optional[float]
-        # Один запрос вероятности → добавляет ProbPoint в MarketState
-
-    def check_closed_markets(self, config: BotConfig) -> List[str]
-        # Проверяет рынки у которых close_time <= now
-        # Возвращает список закрытых market_id
+    def get_closed_ids(self) -> List[str]
+        # Возвращает condition_id рынков у которых close_time <= now
 ```
 
 ---
@@ -483,43 +471,34 @@ class MarketTracker:
 ### `src/bot/order_manager.py`
 
 ```python
+_TAKER_FEE_RATE = 0.01   # 1% комиссия
+
 class OrderManager:
-    client: PolymarketClient
-    shared: SharedState
-    db: DBRepository
+    _client: PolymarketClient
+    _shared: SharedState
+    _db: DBRepository
+    _initial_balance: float     # для режима double_on_double
 
-    def calculate_bet_amount(self, config: BotConfig) -> float
-        # 'fixed'           → config.bet_amount
-        # 'percent'         → balance * config.bet_percent / 100
-        # 'double_on_double'→ bet_amount * floor(balance / initial_balance)
+    def set_initial_balance(self, balance: float) -> None
 
-    def place_bet(
-        self,
-        market: MarketState,
-        signal: SignalResult,
-        config: BotConfig
-    ) -> None
-        # simulation=True → записывает Position без реального ордера
-        # simulation=False → client.place_order() → записывает Position
-        # Сохраняет в DB + SharedState
+    def calculate_bet_amount(self, config: BotConfig, signal: SignalResult) -> float
+        # "fixed"            → config.bet_amount
+        # "percent"          → balance * bet_percent / 100
+        # "double_on_double" → bet_amount * floor(balance / initial_balance)
+        # Если signal.is_danger_zone и danger_zone_action="reduce":
+        #     amount *= danger_zone_reduce_factor
 
-    def settle(
-        self,
-        market_id: str,
-        result: str,
-        config: BotConfig
-    ) -> None
-        # Вычисляет PnL
-        # Создаёт Trade
-        # Обновляет SharedState + DB
+    def place_bet(self, market: MarketState, signal: SignalResult, config: BotConfig) -> None
+        # simulation=True  → Position без реального ордера
+        # simulation=False → client.place_order() → Position с order_id
+        # Сохраняет: SharedState.add_position() + DBRepository.save_position()
+        # Устанавливает market.signal_fired=True, market.status="bet_placed"
 
-    def _calc_pnl(
-        self,
-        position: Position,
-        result: str
-    ) -> float
-        # Won: (1 / entry_price - 1) * amount - commission
-        # Lost: -amount
+    def settle(self, condition_id: str, result: str, config: BotConfig) -> None
+        # result = победивший исход (e.g. "Up")
+        # PnL: won  → (1 / entry_price - 1) * amount - TAKER_FEE_RATE * amount
+        #      lost → -amount
+        # Создаёт Trade, вызывает SharedState.settle_position() + DBRepository.save_trade()
 ```
 
 ---
@@ -528,46 +507,39 @@ class OrderManager:
 
 ```python
 class BotEngine:
-    _client: PolymarketClient
-    _shared: SharedState
-    _db: DBRepository
-    _strategy: LizardStrategy
-    _scanner: MarketScanner
-    _tracker: MarketTracker
-    _order_manager: OrderManager
-    _stop_event: threading.Event
-
-    POLL_INTERVAL: int = 60   # секунд между итерациями
-
-    def stop(self) -> None                      # Устанавливает _stop_event (SIGTERM)
+    POLL_INTERVAL: int = 60     # секунд между итерациями
 
     def run(self) -> None
-        # Thread 1 main loop. Поток живёт всегда.
-        # Каждую итерацию: shared.set_running(config.active)
-        # Торговая логика (_tick) выполняется только если config.active == True
+        # Поток живёт всегда (daemon=True)
+        # Если config.active == False — ждёт, не торгует
+
+    def stop(self) -> None       # Устанавливает _stop_event (SIGTERM/SIGINT)
 
     def _tick(self, config: BotConfig) -> None
-        # handle_commands → scan → poll → process each market → settle closed → update balance
-    def _scan_new_markets(self, config: BotConfig) -> None
+        # handle_commands → scan → poll → process → settle → update_balance
 
     def _process_market(self, market: MarketState, config: BotConfig) -> None
-        # check_signal → если нет истории → _apply_recovery_action
-        # если should_trade → order_manager.place_bet()
+        # check_signal() → нет истории → _apply_recovery_action()
+        # should_trade → order_manager.place_bet()
 
-    def _apply_recovery_action(self, market: MarketState, config: BotConfig) -> Optional[SignalResult]
-        # skip → set status=skipped
-        # enter → SignalResult(True, ...)
-        # enter_if_safe → только если prob вне danger_zone
+    def _apply_recovery_action(self, market, config) -> Optional[SignalResult]
+        # Для рынков у которых окно T-30 уже прошло (бот был офлайн)
+        # "skip"           → set_market_status("skipped"), None
+        # "enter"          → SignalResult(True, ...) — входим без проверки
+        # "enter_if_safe"  → SignalResult(True, ...) только если prob вне danger_zone
 
     def _settle_market(self, condition_id: str, config: BotConfig) -> None
         # get_market_result(slug) → order_manager.settle()
 
-    def _recover_state(self) -> None            # Загружает рынки и позиции из DB
-    def _recover_closed_markets(self, position_ids: set) -> None
-    def _handle_commands(self) -> None          # служебные команды (stop через SIGTERM, не через фронт)
+    def _recover_state(self) -> None
+        # Вызывается до старта потоков
+        # Загружает из DB: активные рынки + открытые позиции → SharedState
+        # Помечает рынки как tracked в MarketScanner
+        # Для закрытых рынков с открытой позицией: settle немедленно
+
     def _update_balance(self, config: BotConfig) -> None
-        # simulation_mode=True → не обращается к CLOB, устанавливает $100 один раз (при balance=0)
-        # simulation_mode=False → get_balance() → shared + db
+        # simulation_mode=True  → $100 один раз (не обращается к CLOB)
+        # simulation_mode=False → client.get_balance() → shared + db
 ```
 
 ---
@@ -576,22 +548,19 @@ class BotEngine:
 
 ```python
 class DBRepository:
-    db_path: str
-    _conn: sqlite3.Connection
+    """SQLite, потокобезопасность через threading.Lock."""
 
     def init_schema(self) -> None
-        # Создаёт таблицы если не существуют
 
     # Markets
-    def save_market(self, market: MarketState) -> None
-    def load_active_markets(self) -> List[MarketState]
-    def update_market_status(self, market_id: str, status: str) -> None
-    def save_prob_point(self, market_id: str, point: ProbPoint) -> None
+    def save_market(self, market: MarketState) -> None      # INSERT OR REPLACE
+    def load_active_markets(self) -> List[MarketState]      # status NOT IN ('closed','skipped')
+    def update_market_status(self, condition_id: str, status: str) -> None
 
     # Positions
-    def save_position(self, position: Position) -> None
+    def save_position(self, position: Position) -> None     # INSERT OR REPLACE
     def load_open_positions(self) -> List[Position]
-    def close_position(self, market_id: str) -> None
+    def close_position(self, condition_id: str) -> None     # DELETE
 
     # Trades
     def save_trade(self, trade: Trade) -> None
@@ -599,83 +568,85 @@ class DBRepository:
 
     # Balance
     def save_balance(self, balance: float, timestamp: datetime) -> None
-    def load_latest_balance(self) -> Optional[float]
-
-    # Stats
-    def compute_stats(self) -> StatsSnapshot
+    def compute_stats(self, simulation_mode: bool) -> StatsSnapshot
 ```
 
 ---
 
-### `src/api/auth.py` + `websocket.py` + `routes.py` + `server.py`
+### `src/api/auth.py`
 
 ```python
-# auth.py — сессионная аутентификация (cookie)
-_STORE: dict = {}   # token → username (in-memory, сбрасывается при рестарте)
+SESSION_COOKIE = "lz_session"
+_STORE: dict = {}           # token → username (in-memory, сбрасывается при рестарте)
 
-def create_session(username: str) -> str       # secrets.token_urlsafe(32) → сохранить в _STORE
+def create_session(username: str) -> str
+    # secrets.token_urlsafe(32) → _STORE[token] = username → token
+
 def delete_session(token: str) -> None
 def get_session_user(token: str) -> Optional[str]
-def check_credentials(username, password, shared) -> bool   # bcrypt.checkpw из конфига
+
+def check_credentials(username, password, shared) -> bool
+    # config.users[username] → bcrypt.checkpw(password, hash)
 
 class SessionAuth:
-    # FastAPI dependency: проверяет Cookie "lz_session" → username или HTTP 401
+    # FastAPI Dependency: Cookie("lz_session") → username | HTTP 401
     def __call__(self, lz_session: Optional[str] = Cookie(default=None)) -> str
+```
 
-# websocket.py
+**Важно:** `from __future__ import annotations` **не используется** в `routes.py`.
+Причина: локальный тип `Username = Annotated[str, Depends(auth)]` становится строкой при отложенных аннотациях, `get_type_hints()` не находит его в глобальном namespace, FastAPI трактует `username` как query-параметр и возвращает 422.
+
+---
+
+### `src/api/websocket.py`
+
+```python
+_HISTORY_IN_MARKETS = 60    # последних точек prob_history в payload рынка
+
 class WebSocketManager:
     _connections: Set[WebSocket]
-    _log_cursor: int              # индекс последнего отправленного лога
+    _log_cursor: int            # индекс последнего отправленного лога
 
-    async def connect(self, ws: WebSocket) -> None    # accept + _push_snapshot
-    async def disconnect(self, ws: WebSocket) -> None
-    async def broadcast(self, event: str, data: Any) -> None
-    async def push_loop(self) -> None                 # asyncio task, каждые 3 сек
-    async def _push_snapshot(self, ws: WebSocket) -> None  # полное состояние новому клиенту
-    async def _push_periodic(self) -> None            # status + markets + new_logs
-    async def _push_new_logs(self) -> None            # только новые записи (по _log_cursor)
+    async def connect(self, ws: WebSocket) -> None
+        # accept() → _push_snapshot(ws)
 
-# WebSocket события:
-# connect    → snapshot: status, stats, markets, positions, history, logs
-# push_loop  → status, markets (каждые 3 сек)
-# push_loop  → logs_append (только новые записи)
+    async def push_loop(self) -> None
+        # asyncio task, каждые 3 сек: status + markets + logs_append
 
-# routes.py — create_router(shared, auth: SessionAuth, loader) → APIRouter(prefix="/api")
-# Все /api/* защищены SessionAuth (Depends(auth) → username str | HTTP 401)
-# ВАЖНО: from __future__ import annotations НЕ используется в routes.py —
-#   иначе local type alias Username = Annotated[str, Depends(auth)] становится строкой,
-#   get_type_hints() не находит её в глобальном namespace и FastAPI трактует
-#   username как обычный query-параметр (422 вместо авторизации)
-GET   /api/status     → BotStatus (dict)
-GET   /api/markets    → List[market_summary]
-GET   /api/positions  → List[Position]
-GET   /api/history    → List[Trade]  (limit: int = 100)
-GET   /api/stats      → StatsSnapshot
-GET   /api/logs       → List[LogEntry] (limit: int = 200)
-GET   /api/whoami     → {"username": str}
-POST  /api/start      → loader.patch({"active": True}) → {"ok": true}
-POST  /api/stop       → loader.patch({"active": False}) → {"ok": true}
-GET   /api/config     → dataclasses.asdict(shared.get_config_snapshot())
-POST  /api/config     → validate via loader._parse() → loader.save_full(data)
-PATCH /api/config     → loader.patch(data)
-WS    /ws             → cookie проверяется при handshake → close(1008) если нет сессии
+# При подключении (snapshot):
+#   status, stats, markets, positions, history (50), logs (100)
 
-# server.py — порядок регистрации маршрутов (важен для catch-all):
-# 1. GET/POST /login  — публичные (форма входа)
-# 2. GET /logout      — публичный (чистит cookie, редиректит на /login)
-# 3. /api/*           — SessionAuth (401 если нет сессии)
-# 4. WS /ws           — проверка cookie
-# 5. /js, /css        — StaticFiles (публичные: только JS/CSS, не содержат данных)
-# 6. GET /            — проверка cookie → 302 /login или index.html
-# 7. GET /{path}      — проверка cookie → 302 /login или index.html (SPA fallback)
-#
-# _FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend" (абсолютный путь)
+# Периодически (каждые 3 сек):
+#   status, markets, logs_append (только новые, по _log_cursor)
 
+# market_summary payload:
+# {condition_id, slug, question, series_ticker, close_time, start_time,
+#  status, signal_fired, outcomes, latest_prob, latest_prob_ts,
+#  prob_history: последние 60 точек [{timestamp, probability}]}
+```
+
+---
+
+### `src/api/server.py`
+
+```python
 class APIServer:
-    def __init__(self, shared: SharedState, loader: ConfigLoader) -> None
     def run(self) -> None
-        # uvicorn.run() с ssl_certfile/ssl_keyfile если оба заданы в конфиге
-        # Если SSL не задан — предупреждение в лог, запуск без TLS
+        # Запускает uvicorn
+        # SSL: если ssl_certfile и ssl_keyfile заданы → HTTPS
+        # Если SSL не задан → WARNING в лог, запуск без TLS
+
+# _FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"  (абсолютный путь)
+
+# Порядок регистрации маршрутов (важен для catch-all):
+# 1. GET  /login      ← публичный, /login?error=1 при неверных данных
+# 2. POST /login      ← проверка credentials → set cookie → 303 /
+# 3. GET  /logout     ← удалить cookie → 302 /login
+# 4. /api/*           ← SessionAuth (401 без сессии)
+# 5. WS  /ws          ← cookie при handshake → close(1008) без сессии
+# 6. /js, /css        ← StaticFiles (публичные)
+# 7. GET  /           ← cookie → 302 /login или index.html
+# 8. GET  /{path}     ← cookie → 302 /login или index.html (SPA fallback)
 ```
 
 ---
@@ -683,27 +654,29 @@ class APIServer:
 ### `src/main.py`
 
 ```python
-def main() -> None:
-    db = DBRepository("data/lizardbot.db")
-    db.init_schema()
+def setup_logging(level, shared):
+    # fmt: "%(asctime)s [%(levelname)-8s] [%(threadName)s] %(name)s: %(message)s"
+    # Handlers: StreamHandler(stdout) + FileHandler("logs/lizardbot.log") + SharedLogHandler
+    # SharedLogHandler → каждый log-вызов → LogEntry → shared.add_log() → фронтенд
 
-    initial_config = ConfigLoader("config.json").load()
-    shared = SharedState(config=initial_config)
+def main():
+    db = DBRepository("data/lizardbot.db"); db.init_schema()
+    config = ConfigLoader("config.json").load()
+    shared = SharedState(config=config)
+    setup_logging(config.log_level, shared)
 
-    engine     = BotEngine(shared=shared, db=db)
+    client     = PolymarketClient(config)
+    engine     = BotEngine(client=client, shared=shared, db=db)
     cfg_loader = ConfigLoader("config.json", shared=shared)
     api        = APIServer(shared=shared, loader=cfg_loader)
 
-    t1 = Thread(target=engine.run,     name="BotEngine",    daemon=True)
-    t2 = Thread(target=api.run,        name="APIServer",    daemon=True)
-    t3 = Thread(target=cfg_loader.run, name="ConfigLoader", daemon=True)
+    engine._recover_state()     # восстановление из DB до старта потоков
 
-    engine._recover_state()   # восстановление состояния перед стартом
+    Thread(target=engine.run,     name="BotEngine",    daemon=True).start()
+    Thread(target=api.run,        name="APIServer",    daemon=True).start()
+    Thread(target=cfg_loader.run, name="ConfigLoader", daemon=True).start()
 
-    t1.start(); t2.start(); t3.start()
-
-    # Graceful shutdown (SIGINT / SIGTERM)
-    ...
+    # SIGINT/SIGTERM → engine.stop() → join
 ```
 
 ---
@@ -712,55 +685,51 @@ def main() -> None:
 
 ```sql
 CREATE TABLE markets (
-    market_id   TEXT    PRIMARY KEY,
-    question    TEXT    NOT NULL,
-    start_time  INTEGER NOT NULL,   -- unix timestamp
-    close_time  INTEGER NOT NULL,
-    outcome_yes TEXT    NOT NULL,
-    outcome_no  TEXT    NOT NULL,
-    status      TEXT    NOT NULL,   -- monitoring|bet_placed|closed|skipped
-    signal_fired INTEGER DEFAULT 0,
-    signal_time  INTEGER,
-    created_at  INTEGER NOT NULL
+    condition_id    TEXT    PRIMARY KEY,
+    slug            TEXT    NOT NULL,
+    question        TEXT    NOT NULL,
+    series_ticker   TEXT    NOT NULL,
+    start_time      TEXT    NOT NULL,   -- ISO datetime
+    close_time      TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL,
+    outcomes        TEXT    NOT NULL,   -- JSON array: ["Up","Down"]
+    token_ids       TEXT    NOT NULL,   -- JSON object: {"Up":"0x...","Down":"0x..."}
+    order_min_size  REAL    NOT NULL,
+    neg_risk        INTEGER NOT NULL,   -- 0|1
+    signal_fired    INTEGER DEFAULT 0,
+    signal_time     TEXT,
+    status          TEXT    NOT NULL    -- monitoring|bet_placed|closed|skipped
 );
-
-CREATE TABLE prob_history (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    market_id   TEXT    NOT NULL,
-    timestamp   INTEGER NOT NULL,
-    probability REAL    NOT NULL,
-    FOREIGN KEY (market_id) REFERENCES markets(market_id)
-);
+-- prob_history НЕ хранится в БД — только в памяти (SharedState.markets[*].prob_history)
 
 CREATE TABLE positions (
-    market_id   TEXT    PRIMARY KEY,
-    outcome     TEXT    NOT NULL,
-    amount      REAL    NOT NULL,
-    entry_price REAL    NOT NULL,
-    entry_time  INTEGER NOT NULL,
-    order_id    TEXT,
-    simulation  INTEGER NOT NULL,   -- 0|1
-    FOREIGN KEY (market_id) REFERENCES markets(market_id)
+    condition_id    TEXT    PRIMARY KEY,
+    outcome         TEXT    NOT NULL,
+    amount          REAL    NOT NULL,
+    entry_price     REAL    NOT NULL,
+    entry_time      TEXT    NOT NULL,
+    simulation      INTEGER NOT NULL,   -- 0|1
+    order_id        TEXT
 );
 
 CREATE TABLE trades (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    market_id   TEXT    NOT NULL,
-    question    TEXT    NOT NULL,
-    outcome     TEXT    NOT NULL,
-    amount      REAL    NOT NULL,
-    entry_price REAL    NOT NULL,
-    entry_time  INTEGER NOT NULL,
-    close_time  INTEGER NOT NULL,
-    result      TEXT    NOT NULL,   -- won|lost
-    pnl         REAL    NOT NULL,
-    simulation  INTEGER NOT NULL    -- 0|1
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id    TEXT    NOT NULL,
+    question        TEXT    NOT NULL,
+    outcome         TEXT    NOT NULL,
+    amount          REAL    NOT NULL,
+    entry_price     REAL    NOT NULL,
+    entry_time      TEXT    NOT NULL,
+    close_time      TEXT    NOT NULL,
+    result          TEXT    NOT NULL,   -- won|lost
+    pnl             REAL    NOT NULL,
+    simulation      INTEGER NOT NULL    -- 0|1
 );
 
 CREATE TABLE balance_history (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    balance     REAL    NOT NULL,
-    timestamp   INTEGER NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    balance         REAL    NOT NULL,
+    timestamp       TEXT    NOT NULL
 );
 ```
 
@@ -770,99 +739,108 @@ CREATE TABLE balance_history (
 
 ```
 LizardBot/
-├── src/
-│   ├── main.py
-│   ├── shared/
-│   │   ├── __init__.py
-│   │   ├── models.py           # все dataclass-модели
-│   │   └── state.py            # SharedState
-│   ├── config/
-│   │   ├── __init__.py
-│   │   ├── models.py           # BotConfig, ServerConfig
-│   │   └── loader.py           # ConfigLoader (Thread 3)
-│   ├── client/
-│   │   ├── __init__.py
-│   │   └── polymarket.py       # PolymarketClient
-│   ├── bot/
-│   │   ├── __init__.py
-│   │   ├── engine.py           # BotEngine (Thread 1)
-│   │   ├── scanner.py          # MarketScanner
-│   │   ├── tracker.py          # MarketTracker
-│   │   ├── strategy.py         # LizardStrategy
-│   │   └── order_manager.py    # OrderManager
-│   ├── db/
-│   │   ├── __init__.py
-│   │   └── repository.py       # DBRepository
-│   └── api/
-│       ├── __init__.py
-│       ├── server.py           # FastAPI app (Thread 2)
-│       ├── routes.py           # HTTP endpoints
-│       ├── websocket.py        # WebSocketManager
-│       └── auth.py             # BasicAuthMiddleware
-├── frontend/
-│   ├── login.html              # Отдельная страница входа (<form method="post" action="/login">)
-│   ├── index.html              # SPA: 3 таба (Мониторинг / Логи / Настройки)
-│   │                           # navbar: статус, баланс, username, /logout, theme toggle
-│   ├── js/
-│   │   └── app.js              # WS-клиент, рендер, редактор конфига
-│   │                           # apiFetch: 401 → location.href='/login'
-│   │                           # fetchWhoami() на DOMContentLoaded
-│   └── css/
-│       └── style.css           # CSS vars: --lz-* (dark в :root, light в [data-bs-theme="light"])
-│                               # --bs-* Bootstrap overrides только в [data-bs-theme="dark"]
-├── data/
-│   └── lizardbot.db            # SQLite
-├── logs/
-│   └── lizardbot.log
-├── config.json                 # ! в .gitignore (содержит api_key)
-├── config.example.json         # пример без секретов
+├── install.sh                  # автоматический инсталлятор Ubuntu (Python 3.11)
+├── config.json                 # ! в .gitignore (содержит приватные ключи)
+├── config.example.json         # шаблон без секретов
 ├── requirements.txt
 ├── ARCHITECTURE.md
-└── CLAUDE.md
+├── DEPLOY.md
+├── CLAUDE.md
+├── src/
+│   ├── main.py                 # точка входа: 3 потока + setup_logging + SIGTERM
+│   ├── shared/
+│   │   ├── models.py           # все dataclass-модели (MarketState, Position, Trade, ...)
+│   │   ├── state.py            # SharedState — единственный канал между потоками
+│   │   └── log_handler.py      # SharedLogHandler → logging → фронтенд в реальном времени
+│   ├── config/
+│   │   ├── models.py           # BotConfig, ServerConfig, MarketFilterConfig
+│   │   └── loader.py           # ConfigLoader: mtime-based hot-reload + atomic save
+│   ├── client/
+│   │   └── polymarket.py       # GammaClient (/series→/markets) + PolymarketClient (CLOB)
+│   ├── bot/
+│   │   ├── engine.py           # BotEngine (Thread 1): главный цикл оркестратор
+│   │   ├── scanner.py          # MarketScanner: поиск новых рынков через Gamma API
+│   │   ├── tracker.py          # MarketTracker: обновление prob_history + детектирование закрытий
+│   │   ├── strategy.py         # LizardStrategy: Hypothesis 1 (T-30, vol filter, danger zone)
+│   │   └── order_manager.py    # OrderManager: ставки, расчёт PnL, закрытие позиций
+│   ├── db/
+│   │   └── repository.py       # DBRepository: SQLite (markets, positions, trades, balance)
+│   └── api/
+│       ├── server.py           # FastAPI app + uvicorn (HTTPS) + маршрутизация
+│       ├── routes.py           # /api/* эндпоинты (SessionAuth)
+│       ├── websocket.py        # WebSocketManager: snapshot + periodic push каждые 3 сек
+│       └── auth.py             # SessionAuth: cookie lz_session, bcrypt, in-memory _STORE
+├── frontend/
+│   ├── login.html              # страница входа (<form method="post" action="/login">)
+│   ├── index.html              # SPA: вкладки Мониторинг / Логи / Настройки
+│   ├── js/app.js               # WS-клиент, рендер карточек, Chart.js, редактор конфига
+│   └── css/style.css           # CSS vars --lz-* (dark/:root, light/[data-bs-theme="light"])
+├── tests/
+│   ├── test_strategy.py
+│   └── test_order_manager.py
+├── data/
+│   └── lizardbot.db            # SQLite (создаётся автоматически)
+├── logs/
+│   └── lizardbot.log           # ротация через logrotate (14 дней, сжатие)
+└── certs/
+    ├── cert.pem                # ! в .gitignore
+    └── key.pem                 # ! в .gitignore
 ```
 
 ---
 
-## config.example.json
+## Frontend Architecture
 
-Ключевые поля (полный пример в `config.example.json`):
+```
+frontend/login.html
+  └── <form method="post" action="/login">
+        username + password → POST /login → cookie lz_session → 303 /
 
-```json
-{
-  "private_key": "0xYOUR_POLYGON_PRIVATE_KEY",
-  "funder_address": "0xYOUR_WALLET_ADDRESS",
-  "active": false,
-  "simulation_mode": true,
-  "vol_threshold": 0.20,
-  "lookback_minutes": 30,
-  "danger_zone_action": "skip",
-  "recovery_action": "enter_if_safe",
-  "bet_mode": "fixed",
-  "bet_amount": 1.0,
-  "market_filters": [
-    { "name": "BTC 4h", "series_ticker": "btc-up-or-down-4h", "enabled": true }
-  ],
-  "server": { "host": "0.0.0.0", "port": 8080 },
-  "users": {
-    "admin":  "$2b$12$...",
-    "BECICI": "$2b$12$..."
-  }
-}
+frontend/index.html (SPA)
+  ├── Navbar: статус-бейдж, баланс, WS-иконка, username, /logout, тема
+  ├── Simulation banner (если simulation_mode=True)
+  ├── Control panel: Start/Stop, чекбокс Simulation, P&L / Trades / WinRate
+  └── Вкладки (Bootstrap Tabs):
+      ├── Мониторинг:
+      │   ├── Рынки (market cards с Chart.js)
+      │   ├── Открытые позиции (таблица)
+      │   └── История сделок (таблица)
+      ├── Логи (терминал, real-time)
+      └── Настройки (редактор конфига)
+
+frontend/js/app.js
+  ├── WebSocket: connectWS() → автопереподключение каждые 3 сек
+  ├── handleEvent(): status | stats | markets | positions | history | logs | logs_append
+  ├── renderMarkets():
+  │   ├── Сортировка: активные (opened) выше pending (ещё не открытых)
+  │   ├── Pending-карточки: свёрнуты, показывают "Ожидаем открытия + через N мин"
+  │   └── Chart.js line chart:
+  │       ├── Тип: "time" (x: Date, y: число от 0 до 100)
+  │       ├── Диапазон X: start_time → close_time (фиксированный)
+  │       ├── Единица: "minute" (≤2ч) или "hour" (>2ч)
+  │       └── Адаптер: chartjs-adapter-date-fns
+  ├── apiFetch(): при 401 → location.href='/login'
+  └── Тема: localStorage "lz-theme", dark/light через data-bs-theme
 ```
 
-**Запуск/стоп стратегии:** только через `active`. Кнопки на фронте пишут в config.json через `loader.patch()`, ConfigLoader подхватывает изменение на следующей итерации.
+---
 
-**Симуляция:** чекбокс на фронте → `PATCH /api/config` с `{"simulation_mode": true/false}`.
-В simulation_mode=True поля `private_key` и `funder_address` не обязательны (`.get()` с дефолтом `""`).
-`PolymarketClient` в sim mode создаёт `ClobClient(host=...)` без credentials — только публичные эндпоинты.
+## Key Design Decisions
 
-**Аутентификация — серверные сессии (cookie):**
-- Сессии хранятся в памяти: `_STORE: dict = {token → username}` (сбрасываются при рестарте)
-- Токен — `secrets.token_urlsafe(32)`, cookie `lz_session` с флагами `httponly`, `samesite=strict`
-- Неавторизованный запрос к странице → `302 /login`, к API → `401`
-- WebSocket → `close(1008)` при отсутствии сессии
-- Публичны только: `/login`, `/logout`, `/js/*`, `/css/*` (статика без данных)
-- Страница входа `frontend/login.html` — отдельный HTML с `<form method="post" action="/login">`
-- После входа сервер ставит cookie и делает `303 /`; после выхода удаляет cookie и делает `302 /login`
-- Фронт (`app.js`): `apiFetch()` не добавляет заголовков (cookie отправляется браузером автоматически);
-  при `401` → `location.href = '/login'`; на DOMContentLoaded → `fetchWhoami()` для отображения имени
+**1. SharedState — единственный канал между потоками**
+Потоки не общаются напрямую. Все данные идут через SharedState (RLock). DBRepository — отдельный слой под SharedState с собственным Lock.
+
+**2. prob_history только в памяти**
+Не хранится в БД — заполняется трекером заново после каждого рестарта. Экономит место и упрощает схему.
+
+**3. Hot-reload конфига без перезапуска**
+ConfigLoader (Thread 3) следит за mtime. BotEngine и APIServer копируют конфиг в начале каждой итерации через `get_config_snapshot()` — изменения вступают в силу максимум через POLL_INTERVAL сек.
+
+**4. from __future__ import annotations запрещён в routes.py**
+FastAPI использует `get_type_hints()` для dependency injection. Отложенные аннотации превращают локальный тип `Username` в строку, которую FastAPI не может разрешить → трактует как query-параметр → 422.
+
+**5. Gamma API: /series endpoint вместо /markets?series_slug=...**
+Параметр `series_slug` в `/markets` игнорируется Gamma API. Правильный путь: `/series?slug=TICKER` → event tickers → `/markets?slug=TICKER` для каждого.
+
+**6. Python 3.11 обязателен**
+Python 3.12.x имеет известные проблемы с segfault при комбинации C-расширений (cytoolz, ckzg) из стека py-clob-client с модулем `logging`. install.sh автоматически выбирает Python 3.11.
