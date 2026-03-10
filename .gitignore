@@ -1,0 +1,16 @@
+config.json
+*.db
+*.db-shm
+*.db-wal
+data/
+logs/
+certs/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+.claude/

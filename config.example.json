@@ -1,0 +1,43 @@
+{
+  "private_key": "0xYOUR_POLYGON_PRIVATE_KEY",
+  "api_key": "",
+  "api_secret": "",
+  "api_passphrase": "",
+  "funder_address": "0xYOUR_WALLET_ADDRESS",
+
+  "active": false,
+  "simulation_mode": true,
+
+  "vol_threshold": 0.20,
+  "lookback_minutes": 30,
+  "danger_zone_action": "skip",
+  "danger_zone_reduce_factor": 0.5,
+  "recovery_action": "enter_if_safe",
+
+  "bet_mode": "fixed",
+  "bet_amount": 1.0,
+  "bet_percent": 5.0,
+
+  "market_filters": [
+    {
+      "name": "BTC 4h",
+      "series_ticker": "btc-up-or-down-4h",
+      "enabled": true
+    }
+  ],
+
+  "config_reload_interval": 10,
+  "log_level": "INFO",
+
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8443,
+    "ssl_certfile": "certs/cert.pem",
+    "ssl_keyfile": "certs/key.pem"
+  },
+
+  "users": {
+    "admin": "$2b$12$LUyp/S1MuLeageiEphUS0eVNx1LC3L9DymX.tC8oeWHrq/n5kRloa",
+    "BECICI": "$2b$12$LGuO0ANOI6DmaQJXStNgjOxHmVjxSkh9Ri5wYzynCo/MWgORaFXne"
+  }
+}
